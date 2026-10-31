@@ -1,0 +1,71 @@
+name: trino
+
+# Compute layer: Trino = SQL engine ที่ทำงานหนักทั้งหมด (Airflow แค่ส่ง SQL มา)
+#   https://localhost:8443 (หน้าเว็บ + DBeaver) · ใน network: https://trino:8443
+#   catalog/  = 1 ไฟล์ต่อ 1 แหล่ง: lakehouse (Iceberg บน RustFS), raw (ไฟล์ CSV/JSON ใน bucket raw), shop (postgres ของร้าน)
+#   etc/      = server config: HTTPS, login ผ่าน LDAP, ถามสิทธิ์จาก OPA
+#   opa/      = policy สิทธิ์ (ใครอ่าน / เขียนอะไรได้, คอลัมน์ไหนปิดบัง)
+#   ห้องเรียนใช้เครื่องเดียว (coordinator ทำหน้าที่ worker ด้วย) · prod = coordinator 1 + worker หลายเครื่อง เพิ่ม worker = scale out
+# ต้องเปิด data-sources, rustfs, ldap ก่อน
+
+services:
+  trino-certs:
+    # ครั้งแรก: สร้าง TLS cert ลง ./certs (init/make_certs.sh) · ครั้งต่อไปข้าม
+    image: trinodb/trino:484
+    entrypoint: ["bash", "/init/make_certs.sh"]
+    user: "0:0"                                 # root: เขียนลง ./certs ได้แม้ docker สร้างโฟลเดอร์เป็นของ root (Linux)
+    environment:
+      TRINO_KEYSTORE_PASSWORD: ${TRINO_KEYSTORE_PASSWORD:-trino-keystore}
+    volumes:
+      - ./init:/init:ro
+      - ./certs:/certs
+
+  opa:
+    # Open Policy Agent: Trino ถามทุกครั้งว่าผู้ใช้คนนี้ทำสิ่งนี้ได้ไหม · รันคู่กับ Trino (sidecar) แบบที่ prod นิยม
+    # แก้ opa/trino.rego แล้วต้อง docker compose restart opa (บน Windows --watch มองไม่เห็นการแก้ไฟล์)
+    # --log-level error = ไม่ log ทุก request (pipeline ถามหลายพันครั้งต่อรอบ)
+    #   อยากเห็นทุกการตัดสิน (input + allow/deny) เพิ่ม "--set", "decision_logs.console=true" แล้ว docker logs opa
+    image: openpolicyagent/opa:1.22.0
+    container_name: opa
+    restart: unless-stopped
+    command: ["run", "--server", "--addr", ":8181", "--log-level", "error", "/policies/trino.rego"]
+    volumes:
+      - ./opa:/policies:ro
+    networks: [data-platform]
+
+  trino:
+    image: trinodb/trino:484
+    container_name: trino
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TRINO_PORT:-8443}:8443"
+    environment:                                # ไฟล์ .properties อ่านค่าเหล่านี้ด้วย ${ENV:...}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-student}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-classroom}
+      SHOP_DB_USER: ${SHOP_DB_USER:-student}
+      SHOP_DB_PASSWORD: ${SHOP_DB_PASSWORD:-student123}
+      TRINO_KEYSTORE_PASSWORD: ${TRINO_KEYSTORE_PASSWORD:-trino-keystore}
+      TRINO_SHARED_SECRET: ${TRINO_SHARED_SECRET:-change-me-classroom-shared-secret}
+      LDAP_BIND_PASSWORD: ${TRINO_BIND_PASSWORD:-trino-bind}
+    volumes:
+      - ./catalog:/etc/trino/catalog:ro
+      - ./etc/config.properties:/etc/trino/config.properties:ro
+      - ./etc/password-authenticator.properties:/etc/trino/password-authenticator.properties:ro
+      - ./etc/group-provider.properties:/etc/trino/group-provider.properties:ro
+      - ./etc/access-control.properties:/etc/trino/access-control.properties:ro
+      - ./certs/private:/etc/trino/certs:ro
+    depends_on:
+      trino-certs:
+        condition: service_completed_successfully
+      opa:
+        condition: service_started
+    networks: [data-platform, data-sources]     # data-platform = rustfs, ldap, airflow · data-sources = shop-db
+
+  # ไม่มีการสร้างตารางตรงนี้: Trino เป็นแค่ engine ไม่รู้จักตารางของธุรกิจ
+  # schema / ตาราง bronze, silver, gold ถูกสร้างโดย pipeline ที่เป็นเจ้าของตอนรันครั้งแรก (airflow/dags/lakehouse/sql/)
+
+networks:
+  data-platform:
+    external: true                              # สร้างโดย rustfs
+  data-sources:
+    external: true                              # สร้างโดย data-sources

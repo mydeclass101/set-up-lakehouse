@@ -1,0 +1,88 @@
+# ผู้ใช้ + กลุ่มตั้งต้น (โหลดครั้งเดียวตอนเปิดครั้งแรก) · @@XXX@@ ถูกแทนด้วย hash ของรหัสผ่านใน .env
+#
+#   ou=people    คน: admin, engineer, analyst
+#   ou=services  บัญชีของระบบ (service account): airflow (รัน pipeline), trino (อ่านกลุ่มจาก LDAP)
+#   ou=groups    กลุ่ม → OPA ใช้ชื่อกลุ่มตัดสินสิทธิ์ (trino/opa/trino.rego)
+
+dn: dc=dataplatform,dc=local
+objectClass: dcObject
+objectClass: organization
+dc: dataplatform
+o: Data Platform
+
+dn: ou=people,dc=dataplatform,dc=local
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=services,dc=dataplatform,dc=local
+objectClass: organizationalUnit
+ou: services
+
+dn: ou=groups,dc=dataplatform,dc=local
+objectClass: organizationalUnit
+ou: groups
+
+# ---------- service accounts ----------
+dn: uid=airflow,ou=services,dc=dataplatform,dc=local
+objectClass: account
+objectClass: simpleSecurityObject
+uid: airflow
+description: Airflow sends SQL to Trino (writes raw / lakehouse)
+userPassword: @@AIRFLOW@@
+
+dn: uid=trino,ou=services,dc=dataplatform,dc=local
+objectClass: account
+objectClass: simpleSecurityObject
+uid: trino
+description: Trino reads group membership (read only)
+userPassword: @@TRINO@@
+
+# ---------- people ----------
+dn: uid=admin,ou=people,dc=dataplatform,dc=local
+objectClass: inetOrgPerson
+uid: admin
+cn: Platform Admin
+sn: Admin
+mail: admin@dataplatform.local
+userPassword: @@ADMIN@@
+
+dn: uid=engineer,ou=people,dc=dataplatform,dc=local
+objectClass: inetOrgPerson
+uid: engineer
+cn: Data Engineer
+sn: Engineer
+mail: engineer@dataplatform.local
+userPassword: @@ENGINEER@@
+
+dn: uid=analyst,ou=people,dc=dataplatform,dc=local
+objectClass: inetOrgPerson
+uid: analyst
+cn: Data Analyst
+sn: Analyst
+mail: analyst@dataplatform.local
+userPassword: @@ANALYST@@
+
+# ---------- groups (ชื่อกลุ่ม = ชื่อที่ OPA ใช้) ----------
+dn: cn=platform-admins,ou=groups,dc=dataplatform,dc=local
+objectClass: groupOfNames
+cn: platform-admins
+description: everything in Trino
+member: uid=admin,ou=people,dc=dataplatform,dc=local
+
+dn: cn=etl,ou=groups,dc=dataplatform,dc=local
+objectClass: groupOfNames
+cn: etl
+description: pipelines - read shop, write raw / lakehouse
+member: uid=airflow,ou=services,dc=dataplatform,dc=local
+
+dn: cn=data-engineers,ou=groups,dc=dataplatform,dc=local
+objectClass: groupOfNames
+cn: data-engineers
+description: read every catalog, no writes (writes go through pipelines)
+member: uid=engineer,ou=people,dc=dataplatform,dc=local
+
+dn: cn=analysts,ou=groups,dc=dataplatform,dc=local
+objectClass: groupOfNames
+cn: analysts
+description: read lakehouse.gold only, customer personal data masked
+member: uid=analyst,ou=people,dc=dataplatform,dc=local

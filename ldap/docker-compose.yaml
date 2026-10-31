@@ -1,0 +1,39 @@
+name: ldap
+
+# Directory: OpenLDAP = สมุดรายชื่อผู้ใช้ + กลุ่มของบริษัท (องค์กรจริงมักเป็น Active Directory / FreeIPA ที่ทีม IT ดูแล)
+#   Trino ใช้ 2 อย่าง: 1) เช็กรหัสผ่านตอน login  2) ดูว่าผู้ใช้อยู่กลุ่มไหน แล้วให้ OPA ตัดสินสิทธิ์จากกลุ่ม
+#   ใน network: ldap://openldap:389 · ผู้ใช้ตั้งต้นอยู่ใน seed/directory.ldif
+# ต้องเปิด rustfs ก่อน (ใช้ network data-platform)
+
+services:
+  openldap:
+    build: .
+    image: data-platform-openldap:2.6
+    container_name: openldap
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LDAP_PORT:-389}:389"         # เผื่อเปิดดูด้วย Apache Directory Studio / ldapsearch จากเครื่อง
+    environment:                                  # ใช้แค่ตอนเปิดครั้งแรก (เปลี่ยนทีหลังต้อง down -v แล้วเปิดใหม่)
+      LDAP_ROOT_PASSWORD: ${LDAP_ROOT_PASSWORD:-ldap-root}
+      TRINO_BIND_PASSWORD: ${TRINO_BIND_PASSWORD:-trino-bind}
+      AIRFLOW_PASSWORD: ${AIRFLOW_TRINO_PASSWORD:-airflow-svc}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      ENGINEER_PASSWORD: ${ENGINEER_PASSWORD:-engineer123}
+      ANALYST_PASSWORD: ${ANALYST_PASSWORD:-analyst123}
+    volumes:
+      - ldap_data:/var/lib/openldap
+    healthcheck:
+      test: ["CMD", "ldapsearch", "-x", "-H", "ldap://localhost", "-b", "", "-s", "base", "namingContexts"]
+      interval: 60s                               # เช็กไม่ถี่ (ทุกครั้งขึ้นใน log ของ slapd)
+      start_period: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 3
+    networks: [data-platform]
+
+volumes:
+  ldap_data:
+
+networks:
+  data-platform:
+    external: true                                # สร้างโดย rustfs
